@@ -1,0 +1,140 @@
+#roboanim dev Guide/
+#__init__
+#props
+#ui
+#core_math
+#core_path
+#core_rpm
+#export
+
+# ----------------------------
+# __init__.py  (entry point)
+# ----------------------------
+# - Holds bl_info.
+# - Imports SG_Props, panel, and all operators.
+# - Registers/unregisters classes.
+# - Defines THIN operators that call functions in core_* and export.
+# Public surface:
+#   register(), unregister()
+
+# ----------------------------
+# props.py  (single source of truth for settings)
+# ----------------------------
+# - One bpy.types.PropertyGroup: SG_Props.
+# - Stores object pointers and parameters:
+#     chassis, left_collection, right_collection, wheel_axis,
+#     track_width, tire_spacing, rotation_mode,
+#     length_unit, angle_unit, angrate_unit,
+#     anim_export_path, eng_export_path, other_export_path (keyframe CSV).
+# - No I/O, no heavy logic.
+# Public surface:
+#   class SG_Props(PropertyGroup)
+
+# ----------------------------
+# ui.py  (one collapsible panel, no logic)
+# ----------------------------
+# - Draws SG_Props and places buttons.
+# - Calls operators by idname only.
+# - No math, no file writes, no scene edits except reading props.
+# Public surface:
+#   class SG_PT_Main(Panel)
+
+# ----------------------------
+# core_math.py  (pure python, zero bpy)
+# ----------------------------
+# - Basic math and units used everywhere.
+#   * Unit conversion: deg↔rad, m↔cm.
+#   * Lerp, clamp, easing curves.
+#   * Bezier/path evaluation helpers.
+#   * Optional arc-length LUT builder and sampler.
+# - Contains NO Blender imports. Safe to unit test headless.
+# Public surface (example, adjust to your names):
+#   rad(deg), deg(rad), m_to_cm(m), cm_to_m(cm)
+#   lerp(a,b,t), clamp(x,lo,hi)
+#   ease_in_out_s(t)
+#   bezier_eval(p0,p1,p2,p3,t)
+#   build_arclen_lut(points, step), sample_by_arclen(lut, s)
+
+# ----------------------------
+# core_path.py  (path feasibility, autocorrect, sampling; zero bpy)
+# ----------------------------
+# - Validates chassis motion feasibility w.r.t. track width, slip, turn radius.
+# - Autocorrects path timing/shape to remove violations.
+# - Samples a unified path stream.
+# - No Blender imports; input/output are plain python data.
+# Inputs:
+#   props-like dict (only needed numeric fields), path/keyframe arrays
+# Outputs:
+#   tuples, dicts, and lists (no bpy types)
+# Public surface (example):
+#   validate_path(params, keyframes) -> (ok: bool, bad_frames: list[int], report: dict)
+#   autocorrect(params, keyframes) -> corrected_keyframes
+#   sample_path(params, keyframes, fps) -> list of {t,x,y,yaw}
+
+# ----------------------------
+# core_rpm.py  (drivers, cache, bake; touches bpy)
+# ----------------------------
+# - Converts sampled chassis motion to wheel θ/ω/RPM arrays.
+# - Builds and stores a cache in bpy.app.driver_namespace['roboanim'].
+# - Attaches wheel rotation drivers using that cache.
+# - Optionally bakes rotations to keyframes.
+# - No CSV writing here.
+# Inputs:
+#   context, SG_Props, sampled path (from core_path.sample_path)
+# Outputs:
+#   cache dict with fields:
+#     {'f0','fps','x','y','yaw','thetaL','thetaR','omegaL','omegaR','rpmL','rpmR', ...}
+# Public surface (example):
+#   build_cache(context) -> cache_dict
+#   attach_drivers(context, cache_dict) -> None
+#   bake_rotations(context, cache_dict) -> frames_baked:int
+
+# ----------------------------
+# export.py  (all exports; touches bpy for reading state, writes files)
+# ----------------------------
+# - Reads scene, props, and cache to produce CSVs.
+# - Two distinct CSV flavors plus keyframe export:
+#   1) Animation CSV: t, x, y, yaw, thetaR, thetaL, rpmR, rpmL, etc.
+#   2) Engineering CSV: metadata header + same core samples in engineering units.
+#   3) Keyframe CSV: exports transform values only at keyed frames.
+# - No driver attaching or baking here.
+# Inputs:
+#   context, SG_Props, cache_dict
+# Outputs:
+#   CSV files at paths from SG_Props
+# Public surface (example):
+#   write_animation_csv(context, cache_dict, path) -> rows_written:int
+#   write_engineering_csv(context, cache_dict, path) -> rows_written:int
+#   write_keyframe_csv(context, path, frame_range=None) -> rows_written:int
+
+# ----------------------------
+# Operator IDs (suggested)
+# ----------------------------
+# - "roboanim.calibrate"     -> fill/verify SG_Props object pointers
+# - "roboanim.validate"      -> core_path.validate_path
+# - "roboanim.autocorrect"   -> core_path.autocorrect
+# - "roboanim.build_cache"   -> core_rpm.build_cache
+# - "roboanim.attach"        -> core_rpm.attach_drivers
+# - "roboanim.bake"          -> core_rpm.bake_rotations
+# - "roboanim.export_anim"   -> export.write_animation_csv
+# - "roboanim.export_eng"    -> export.write_engineering_csv
+# - "roboanim.export_keys"   -> export.write_keyframe_csv
+
+# ----------------------------
+# Data flow (single pass)
+# ----------------------------
+# 1) Calibrate -> set SG_Props
+# 2) Validate  -> core_path.validate_path(...)
+# 3) Autocorrect (optional) -> core_path.autocorrect(...)
+# 4) Build Cache -> core_rpm.build_cache(context)
+# 5) Attach/Bake -> core_rpm.attach_drivers(...) / core_rpm.bake_rotations(...)
+# 6) Export      -> export.write_*_csv(...)
+
+# ----------------------------
+# Rules to keep it maintainable
+# ----------------------------
+# - core_math and core_path must not import bpy.
+# - Only core_rpm and export can import bpy.
+# - UI owns no logic. Operators stay thin and only orchestrate calls.
+# - Cache lives under bpy.app.driver_namespace['roboanim'] with a single key.
+# - Units are handled in core_math; no unit math in UI/operators.
